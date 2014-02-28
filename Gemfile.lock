@@ -1,0 +1,14 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    hashie (2.0.5)
+    soda-ruby (0.2.8)
+      hashie
+    trollop (2.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  soda-ruby
+  trollop

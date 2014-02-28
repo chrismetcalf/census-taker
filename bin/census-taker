@@ -1,0 +1,129 @@
+#!/usr/bin/env ruby
+
+require 'soda/client'
+require 'trollop'
+require 'yaml'
+require 'json'
+require 'time'
+
+# We shall pretend this is machine learning or something
+
+### Categories
+# 311 (non-emergency) Service Requests
+# Budget
+# Business Listings
+# Business Permits/Licenses
+# Code Enforcement
+# Construction Permits
+# Contracts
+# Crime
+# Location of Public Facilities
+# Performance Metrics
+# Property Assessment
+# Inventory of Liens
+# Restaurant Inspection
+# Spending
+# Street Closure Permits
+# Transit
+# Zoning
+
+
+MATCHERS = {
+  /311/i                          => "311 (non-emergency) Service Requests",
+  /budget/i                       => "Budget",
+  /business\s+listings/i          => "Business Listings",
+  /business\s+permits/i           => "Business Permits/Licenses",
+  /code\s+enforcement/            => "Code Enforcement",
+  /permits/i                      => "Construction Permits",
+  /contacts/                      => "Contracts",
+  /crime/                         => "Crime",
+  /police/                        => "Crime",
+  /public\s+facilities/           => "Location of Public Facilities",
+  /performance/                   => "Performance Metrics",
+  /assessments?/                  => "Property Assessment",
+  /leins?/                        => "Inventory of Liens",
+  /restaurant\s\+inspection/      => "Restaurant Inspection",
+  /health\s\+inspection/          => "Restaurant Inspection",
+  /spending/                      => "Spending",
+  /expenditures/                  => "Spending",
+  /street\s+closures?/            => "Street Closure Permits",
+  /transit/                       => "Transit",
+  /zoning/                        => "Zoning"
+}
+
+# Read defaults from our config file if it's present
+config = {}
+if File.readable?("#{ENV['HOME']}/.soda.yml")
+  config = YAML::load(File.open("#{ENV['HOME']}/.soda.yml")).inject({}){ |memo, (k,v)| memo[k.to_sym] = v; memo}
+end
+
+# Options
+opts = Trollop::options do
+  opt :domain,        "Site domain",                                   :type => :string, :required => true
+  opt :username,      "Socrata username/email",                        :type => :string, :default => config[:username]
+  opt :password,      "Socrata password",                              :type => :string, :default => config[:password]
+  opt :app_token,     "An app token you've registered for your app",   :type => :string, :default => config[:app_token]
+end
+
+# Let's cache our list of datasets in /tmp so I don't need to keep gathering it
+datasets = []
+if File.exists? "/tmp/#{opts[:domain]}.json"
+  datasets = JSON::parse(IO.read("/tmp/#{opts[:domain]}.json"))
+  puts "Loaded #{datasets.count} datasets from a file"
+else
+  # Set up our client
+  client = SODA::Client.new(config.merge(opts))
+
+  # Grab all the datasets via the catalog API
+  results = nil
+  page = 1
+  begin
+    results = client.get("/api/search/views", {"limit" => 500, "page" => page, "limitTo" => "TABLES"})
+    if(results["results"].nil? || results["results"].count <= 0) 
+      break
+    end
+
+    datasets += results["results"].collect{ |r| r["view"] }
+
+    puts "Got #{datasets.count} total out of #{results["count"]}"
+    page += 1
+  end while true
+
+  # Cache the sucker
+  IO.write("/tmp/#{opts[:domain]}.json", datasets.to_json())
+end
+
+# Let's see what matches
+matches = []
+datasets.each { |ds|
+  next unless(ds["flags"] && ds["flags"].include?("default"))
+  types = []
+
+  MATCHERS.each { |rgx, val|
+    if(rgx.match(ds["name"]) || rgx.match(ds["category"]))
+      types << val
+    end
+  }
+
+  types.each do |type|
+    matches << [
+      type,
+      "http://#{opts[:domain]}/d/#{ds["id"]}",
+      ds["name"],
+      ds["description"],
+      nil,
+      "JSON, XML, CSV, XLSX, Web Accessible",
+      "Found via API",
+      "Unknown",
+      Time.at(ds["rowsUpdatedAt"]).httpdate,
+      "Unknown",
+      ds["owner"]["displayName"],
+      ds["owner"]["displayName"]
+    ]
+  end
+}
+
+matches.each do |m|
+  puts m.join "\t"
+end
+
